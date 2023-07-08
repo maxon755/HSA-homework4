@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
+	"net/url"
+	"os"
+	"time"
 )
 
 type CurrencyRate struct {
@@ -17,21 +22,26 @@ type CurrencyRate struct {
 }
 
 func main() {
+	apiSecret := os.Getenv("GA_API_CLIENT_ID")
+	measurementId := os.Getenv("GA_MEASUREMENT_ID")
 
-	usdRate, err := getUSDRate()
+	for {
+		usdRate, err := getUSDRate()
 
-	if err != nil {
-		fmt.Println("Error:", err)
+		if err != nil {
+			fmt.Println("Error:", err)
+		}
+
+		sendToGA(apiSecret, measurementId, usdRate)
+
+		log.Println("USD rate", usdRate, "was sent to GA")
+		time.Sleep(60 * time.Minute)
 	}
-
-	fmt.Println("USD:", usdRate)
 }
 
 func getUSDRate() (float32, error) {
-	// Create a new HTTP client
 	client := http.DefaultClient
 
-	// Send an HTTP GET request
 	resp, err := client.Get("https://bank.gov.ua/NBU_Exchange/exchange?json")
 	if err != nil {
 		return 0, err
@@ -58,4 +68,57 @@ func getUSDRate() (float32, error) {
 	}
 
 	return usdRate.Amount, nil
+}
+
+func sendToGA(apiSecret string, measurementId string, usdRate float32) {
+	gaURL := buildGAURL(apiSecret, measurementId)
+
+	body, err := buildRequestBody(usdRate)
+	if err != nil {
+		fmt.Printf("could not marshal json: %s\n", err)
+		return
+	}
+
+	request, err := http.NewRequest("POST", gaURL, bytes.NewBuffer(body))
+	request.Header.Set("Content-Type", "application/json; charset=UTF-8")
+
+	client := &http.Client{}
+	response, err := client.Do(request)
+	if err != nil {
+		panic(err)
+	}
+	defer response.Body.Close()
+}
+
+func buildGAURL(apiSecret string, measurementId string) string {
+	baseURL := "https://www.google-analytics.com"
+	resource := "/mp/collect"
+
+	params := url.Values{}
+	params.Add("api_secret", apiSecret)
+	params.Add("measurement_id", measurementId)
+
+	u, _ := url.ParseRequestURI(baseURL)
+
+	u.Path = resource
+	u.RawQuery = params.Encode()
+
+	return u.String()
+}
+
+func buildRequestBody(usdRate float32) ([]byte, error) {
+	data := map[string]interface{}{
+		"client_id":            "689844021.1688749428",
+		"non_personalized_ads": true,
+		"events": []interface{}{
+			map[string]interface{}{
+				"name": "usd_rate_checked",
+				"params": map[string]interface{}{
+					"value": usdRate,
+				},
+			},
+		},
+	}
+
+	return json.Marshal(data)
 }
